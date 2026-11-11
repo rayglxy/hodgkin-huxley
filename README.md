@@ -1,102 +1,72 @@
-# Hodgkin-Huxley Neuron Simulator
-### Bifurcation Analysis & Phase Portrait of a Biophysical Neuron Model
+# Hodgkin-Huxley neuron: one current, two states
 
-![Phase Portrait](figures/phase_portrait.png)
+Between **6.26 and 9.78 µA/cm²** the Hodgkin-Huxley neuron can either sit silent or fire at 52 to 68 Hz under exactly the same input. A single 1 ms pulse switches it on, and the identical pulse, timed between two spikes, switches it off.
 
-## Overview
+![One pulse starts firing, the same pulse stops it](figures/switch.gif)
 
-This project implements the Hodgkin-Huxley (1952) conductance-based neuron model 
-from scratch in Python, then extends the analysis beyond standard textbook treatment 
-into dynamical systems theory. The goal is not simply to simulate an action potential, 
-but to characterise the mathematical structure of neural excitability — specifically, 
-the bifurcation that governs the transition from quiescence to rhythmic firing.
+## What it is
 
-The Hodgkin-Huxley model earned its authors the 1963 Nobel Prize in Physiology or 
-Medicine. It remains the foundational quantitative description of how neurons generate 
-electrical signals, and underlies virtually every biophysically realistic neural 
-simulation in modern computational neuroscience and brain-computer interface research.
-
-## Scientific context
-
-This project identifies and characterises the Hopf bifurcation in the HH model — 
-the critical injected current at which the resting fixed point loses stability and 
-a stable limit cycle emerges. This is the mathematical event that corresponds 
-biologically to a neuron beginning to fire rhythmically under sustained stimulation.
+The four-equation model of the squid giant axon (Hodgkin and Huxley, 1952) written from scratch in Python, then used to answer one question: at what input does a neuron start firing, and is that the same input at which it stops?
 
 ## Results
 
-| Analysis | Result |
-|----------|--------|
-| Bifurcation point | I = 2.5 µA/cm² |
-| Firing rate range | 0 – 120 Hz across physiological current range |
-| Limit cycle | Stable, reproduced in V-n phase space |
-| Fixed point | Identified at intersection of V and n nullclines |
-| Validation | Action potential morphology consistent with HH 1952 figures |
+![Bistable range](figures/bistability.png)
 
-![f-I Curve](figures/fi_curve.png)
+| Quantity | Value (µA/cm²) | How it was found |
+|---|---|---|
+| Smallest current that gives a single spike | 2.24 | Switch current on from rest, bisect |
+| Smallest current that gives sustained firing when switched on from rest | 6.26 | Same, counting only spikes after the first second |
+| Firing, once started, stops below | 6.264 | Start in the firing state, lower the current, bisect |
+| Resting state becomes unstable above | 9.779 | Eigenvalues of the Jacobian at the resting state cross zero |
 
-## Notebooks
+- When firing starts it jumps straight to about 52 Hz; there is no slow firing. At 20 µA/cm² the rate is 86 Hz.
+- Raising the current slowly from rest, firing began at 10.1 µA/cm². Lowering it again, firing continued down to 6.3. The neuron's response depends on its history.
+- At 8 µA/cm²: 0 spikes before the first pulse, 8 spikes between the pulses, 0 after the second. Both pulses are +5 µA/cm² for 1 ms; the second arrives 8.65 ms after a spike.
 
-| Notebook | Content |
-|----------|---------|
-| `01_model_implementation` | Implementation of the four ODEs, numerical integration via RK45, action potential validation against original 1952 figures |
-| `02_parameter_sweep` | Systematic sweep of injected current (0–50 µA/cm²), spike detection, f-I curve, bifurcation point identification |
-| `03_phase_portrait` | Phase portrait in V-n state space, V-nullcline and n-nullcline computation, limit cycle visualisation, fixed point analysis |
+![Switching](figures/switch.png)
 
-## Repository structure
-HH_Neuron_2026/
-├── notebooks/                  # Main analysis — run in order
-│   ├── 01_model_implementation.ipynb
-│   ├── 02_parameter_sweep.ipynb
-│   └── 03_phase_portrait.ipynb
-├── src/
-│   └── hodgkin_huxley.py       # Clean importable Python module
-├── figures/                    # Exported publication-quality figures
-│   ├── action_potential.png
-│   ├── fi_curve.png
-│   └── phase_portrait.png
-├── matlab/
-│   └── hh_model.m              # MATLAB reimplementation
-├── data/                       # External datasets (if applicable)
-├── requirements.txt
-└── README.md
+![One action potential](figures/action_potential.png)
 
-## How to reproduce
+## Why it was done this way
+
+- **Count only sustained firing.** Between 2.24 and 6.26 µA/cm² the neuron fires one to six spikes when the current is switched on and then stops. Counting those start-up spikes makes the onset look far lower than it is. An earlier version of this repository reported 2.5 for that reason.
+- **Two ways of finding the upper threshold.** The simulation sweep gives 10.1; the eigenvalue calculation gives 9.779. They differ because just above the threshold the resting state loses its grip very slowly, so a sweep with finite waiting time overshoots. The eigenvalue result is the exact one.
+- **Rate from spike spacing.** Firing rate is one divided by the time between spikes, not spikes counted in a window, which would round to multiples of a few Hz.
+- **Rate formulas made safe.** Two of the textbook rate formulas are 0/0 at one voltage each; the code uses the limiting value there.
+
+## Run it
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/hodgkin-huxley.git
-cd hodgkin-huxley
 pip install -r requirements.txt
-jupyter notebook
 ```
 
-Each notebook is self-contained 
-and includes narrative explanation alongside the code.
-
-The `src/hodgkin_huxley.py` module can also be imported directly:
-
-```python
-from src.hodgkin_huxley import simulate, firing_rate
-
-t, V, _ = simulate(I_ext=10.0, t_end=100)
-rate = firing_rate(I_ext=10.0)
+```bash
+pytest -q
 ```
 
-## Methods
+```bash
+python3 scripts/make_figures.py
+```
 
-The model consists of four coupled ordinary differential equations describing 
-the time evolution of membrane voltage V and three gating variables m, h, n. 
-Numerical integration uses the RK45 adaptive solver (`scipy.integrate.solve_ivp`) 
-with maximum step size 0.05 ms. Nullclines are computed under the quasi-steady-state 
-approximation for m and h. All parameters taken directly from Hodgkin & Huxley (1952).
+```bash
+python3 scripts/make_animation.py
+```
+
+The eight tests check the action potential size, the resting state, both thresholds and the bistability. `make_figures.py` takes about four minutes and writes every number above to `data/results.json`.
+
+## Limitations
+
+- This is the original squid-axon model at 6.3 °C with one compartment. Mammalian cortical neurons have other channels and many start firing gradually.
+- Voltages are measured from rest (rest = 0 mV), as in the 1952 paper.
+- No noise is included. With noise, a neuron in the bistable range would switch states at random.
+- The bistability of this model is a known textbook result. What is here is an independent reproduction with tests, not a discovery.
 
 ## Reference
 
-Hodgkin, A.L. & Huxley, A.F. (1952). A quantitative description of membrane current 
-and its application to conduction and excitation in nerve. 
-*Journal of Physiology*, 117, 500–544.
+Hodgkin, A.L. and Huxley, A.F. (1952). A quantitative description of membrane current and its application to conduction and excitation in nerve. *Journal of Physiology*, 117, 500-544.
 
-## Author
-Renata Tukanova
-Computational neuroscience portfolio project.  
-Python 3.10 · NumPy 2.2 · SciPy 1.15 · Matplotlib · Jupyter
+## Licence
+
+MIT (see `LICENSE`).
+
+Renata Tukanova, 2026. A MATLAB version of the basic model is in `matlab/hh_model.m`.

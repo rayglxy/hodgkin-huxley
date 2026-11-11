@@ -1,146 +1,125 @@
 """
-hodgkin_huxley.py
------------------
-Clean implementation of the Hodgkin-Huxley (1952) neuron model.
+Hodgkin-Huxley (1952) squid-axon model, with the tools needed to study how
+firing starts and stops.
 
-Usage:
-    from hodgkin_huxley import simulate, count_spikes
+Conventions (original 1952 paper): voltage V is the DEPOLARISATION from rest
+in mV (rest = 0), time in ms, current density in µA/cm², conductance in mS/cm²,
+temperature 6.3 °C.
 
-Reference:
-    Hodgkin & Huxley (1952). A quantitative description of membrane current
-    and its application to conduction and excitation in nerve.
-    Journal of Physiology, 117, 500-544.
+    from src.hodgkin_huxley import simulate, fixed_point, stability
+
+Reference: Hodgkin & Huxley (1952), J. Physiol. 117, 500-544.
 """
-
 import numpy as np
 from scipy.integrate import solve_ivp
+from scipy.optimize import brentq
+
+# --- parameters (Hodgkin & Huxley 1952) -------------------------------------
+C_M = 1.0                                 # µF/cm²
+G_NA, G_K, G_L = 120.0, 36.0, 0.3         # mS/cm²
+E_NA, E_K, E_L = 115.0, -12.0, 10.6       # mV, relative to rest
+SPIKE_THRESHOLD = 50.0                    # mV; spikes peak near 100, sub-threshold stays < 20
 
 
-# --- Channel kinetics ---
-
-def alpha_m(V): return 0.1 * (25 - V) / (np.exp((25 - V) / 10) - 1)
-def beta_m(V):  return 4.0 * np.exp(-V / 18)
-
-def alpha_h(V): return 0.07 * np.exp(-V / 20)
-def beta_h(V):  return 1.0 / (np.exp((30 - V) / 10) + 1)
-
-def alpha_n(V): return 0.01 * (10 - V) / (np.exp((10 - V) / 10) - 1)
-def beta_n(V):  return 0.125 * np.exp(-V / 80)
+# --- channel kinetics --------------------------------------------------------
+def _x_over_expm1(x):
+    """x / (exp(x) - 1), finite at x = 0 (the raw formula is 0/0 there)."""
+    x = np.asarray(x, dtype=float)
+    small = np.abs(x) < 1e-7
+    safe = np.where(small, 1.0, x)
+    return np.where(small, 1.0 - x / 2.0, safe / np.expm1(safe))
 
 
-# --- Model parameters (Hodgkin & Huxley 1952) ---
+def alpha_m(V): return _x_over_expm1((25.0 - V) / 10.0)
+def beta_m(V):  return 4.0 * np.exp(-V / 18.0)
+def alpha_h(V): return 0.07 * np.exp(-V / 20.0)
+def beta_h(V):  return 1.0 / (np.exp((30.0 - V) / 10.0) + 1.0)
+def alpha_n(V): return 0.1 * _x_over_expm1((10.0 - V) / 10.0)
+def beta_n(V):  return 0.125 * np.exp(-V / 80.0)
 
-PARAMS = {
-    'C_m':  1.0,    # membrane capacitance (µF/cm²)
-    'g_Na': 120.0,  # max Na conductance (mS/cm²)
-    'g_K':  36.0,   # max K conductance (mS/cm²)
-    'g_L':  0.3,    # leak conductance (mS/cm²)
-    'E_Na': 115.0,  # Na reversal potential (mV)
-    'E_K':  -12.0,  # K reversal potential (mV)
-    'E_L':  10.6,   # leak reversal potential (mV)
-}
+def m_inf(V): return alpha_m(V) / (alpha_m(V) + beta_m(V))
+def h_inf(V): return alpha_h(V) / (alpha_h(V) + beta_h(V))
+def n_inf(V): return alpha_n(V) / (alpha_n(V) + beta_n(V))
 
 
-# --- ODE system ---
-
-def hodgkin_huxley(t, state, I_ext, params=PARAMS):
-    """
-    The four coupled ODEs of the Hodgkin-Huxley model.
-
-    Parameters
-    ----------
-    t : float
-        Current time (ms)
-    state : list [V, m, h, n]
-        Current values of the four state variables
-    I_ext : float
-        Externally injected current (µA/cm²)
-    params : dict
-        Model parameters (default: HH 1952 values)
-
-    Returns
-    -------
-    list : [dV/dt, dm/dt, dh/dt, dn/dt]
-    """
+# --- the four equations ------------------------------------------------------
+def derivatives(state, I):
+    """Right-hand side of the model for state = [V, m, h, n] and current I."""
     V, m, h, n = state
-    C_m  = params['C_m']
-    g_Na = params['g_Na']
-    g_K  = params['g_K']
-    g_L  = params['g_L']
-    E_Na = params['E_Na']
-    E_K  = params['E_K']
-    E_L  = params['E_L']
-
-    I_Na = g_Na * m**3 * h * (V - E_Na)
-    I_K  = g_K  * n**4      * (V - E_K)
-    I_L  = g_L              * (V - E_L)
-
-    dV = (I_ext - I_Na - I_K - I_L) / C_m
-    dm = alpha_m(V) * (1 - m) - beta_m(V) * m
-    dh = alpha_h(V) * (1 - h) - beta_h(V) * h
-    dn = alpha_n(V) * (1 - n) - beta_n(V) * n
-
-    return [dV, dm, dh, dn]
+    I_ion = (G_NA * m**3 * h * (V - E_NA) + G_K * n**4 * (V - E_K) + G_L * (V - E_L))
+    return np.array([
+        (I - I_ion) / C_M,
+        alpha_m(V) * (1 - m) - beta_m(V) * m,
+        alpha_h(V) * (1 - h) - beta_h(V) * h,
+        alpha_n(V) * (1 - n) - beta_n(V) * n,
+    ])
 
 
-# --- Initial conditions ---
+def simulate(I, t_end=100.0, dt=0.01, state0=None):
+    """Integrate the model.
 
-def resting_state():
-    """Return the resting state initial conditions [V0, m0, h0, n0]."""
-    V0 = 0.0
-    m0 = alpha_m(V0) / (alpha_m(V0) + beta_m(V0))
-    h0 = alpha_h(V0) / (alpha_h(V0) + beta_h(V0))
-    n0 = alpha_n(V0) / (alpha_n(V0) + beta_n(V0))
-    return [V0, m0, h0, n0]
-
-
-# --- Simulation ---
-
-def simulate(I_ext, t_end=100, dt=0.01):
+    I       constant current (float) or a function I(t) in µA/cm²
+    state0  starting [V, m, h, n]; default is the resting state at I = 0
+    Returns t (ms) and the solution array y with rows V, m, h, n.
     """
-    Run the HH model simulation.
+    current = I if callable(I) else (lambda t: I)
+    y0 = fixed_point(0.0) if state0 is None else np.asarray(state0, dtype=float)
+    t_eval = np.arange(0.0, t_end, dt)
+    sol = solve_ivp(lambda t, y: derivatives(y, current(t)), (0.0, t_end), y0,
+                    t_eval=t_eval, method='LSODA', rtol=1e-8, atol=1e-10, max_step=0.1)
+    return sol.t, sol.y
 
-    Parameters
-    ----------
-    I_ext : float
-        Injected current (µA/cm²)
-    t_end : float
-        Simulation duration (ms)
-    dt : float
-        Time step for output (ms)
 
-    Returns
-    -------
-    t : np.ndarray — time points (ms)
-    V : np.ndarray — voltage trace (mV)
-    full : np.ndarray — full solution [V, m, h, n] x time
+# --- spikes ------------------------------------------------------------------
+def spike_times(t, V, threshold=SPIKE_THRESHOLD):
+    """Times at which V crosses the threshold going up."""
+    up = (V[:-1] < threshold) & (V[1:] >= threshold)
+    return t[1:][up]
+
+
+def firing_rate(t, V, discard=200.0):
+    """Sustained firing rate in Hz, ignoring the first `discard` ms.
+
+    The start-up transient is discarded because a neuron can fire one or a few
+    spikes when the current is switched on and then fall silent. Counting those
+    as "firing" is what makes the onset look much lower than it is.
     """
-    t_eval = np.arange(0, t_end, dt)
-    sol = solve_ivp(
-        hodgkin_huxley,
-        [0, t_end],
-        resting_state(),
-        t_eval=t_eval,
-        args=(I_ext,),
-        method='RK45',
-        max_step=0.05
-    )
-    return sol.t, sol.y[0], sol.y
+    s = spike_times(t, V)
+    s = s[s >= discard]
+    window = t[-1] - discard
+    return 1000.0 * len(s) / window
 
 
-# --- Spike detection ---
+# --- fixed point and its stability -------------------------------------------
+def fixed_point(I):
+    """The resting state for a constant current I: the point where nothing changes."""
+    def net_current(V):
+        return I - (G_NA * m_inf(V)**3 * h_inf(V) * (V - E_NA)
+                    + G_K * n_inf(V)**4 * (V - E_K) + G_L * (V - E_L))
+    V = brentq(net_current, -20.0, 60.0, xtol=1e-12)
+    return np.array([V, float(m_inf(V)), float(h_inf(V)), float(n_inf(V))])
 
-def count_spikes(V_trace, threshold=50.0):
-    """Count upward threshold crossings in a voltage trace."""
-    crossings = 0
-    for i in range(1, len(V_trace)):
-        if V_trace[i-1] < threshold and V_trace[i] >= threshold:
-            crossings += 1
-    return crossings
+
+def jacobian(state, I, eps=1e-6):
+    """Matrix of how each derivative changes with each variable (central differences)."""
+    J = np.zeros((4, 4))
+    for k in range(4):
+        d = np.zeros(4); d[k] = eps
+        J[:, k] = (derivatives(state + d, I) - derivatives(state - d, I)) / (2 * eps)
+    return J
 
 
-def firing_rate(I_ext, t_end=200):
-    """Return firing rate in Hz for a given injected current."""
-    _, V, _ = simulate(I_ext, t_end=t_end)
-    n_spikes = count_spikes(V)
-    return (n_spikes / t_end) * 1000
+def stability(I):
+    """Largest real part of the Jacobian's eigenvalues at the fixed point.
+
+    Negative: a small push away from rest dies out (rest is stable).
+    Positive: a small push grows (rest is unstable; the neuron must fire).
+    """
+    eig = np.linalg.eigvals(jacobian(fixed_point(I), I))
+    lead = eig[np.argmax(eig.real)]
+    return lead.real, abs(lead.imag)
+
+
+def hopf_current(lo=5.0, hi=15.0):
+    """Current at which the resting state loses stability (Hopf bifurcation)."""
+    return brentq(lambda I: stability(I)[0], lo, hi, xtol=1e-6)

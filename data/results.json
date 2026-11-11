@@ -1,0 +1,33 @@
+{
+ "rest_at_zero_current": [
+  0.0003,
+  0.0529,
+  0.5961,
+  0.3177
+ ],
+ "single_spike_threshold": 2.24,
+ "sustained_onset_from_rest_step": 6.26,
+ "firing_stops_below": 6.264,
+ "rest_unstable_above": 9.779,
+ "small_oscillation_Hz_at_instability": 93.3,
+ "action_potential": {
+  "spike_peak_mV": 95.84631879827987,
+  "undershoot_mV": -9.910695406302699
+ },
+ "sweep": {
+  "sweep_up_onset": 10.1,
+  "sweep_down_offset": 6.3,
+  "rate_at_onset_Hz": 52.27619255064256,
+  "rate_at_20_Hz": 86.46779074794638
+ },
+ "switch": {
+  "hold_current": 8.0,
+  "pulse_amplitude": 5.0,
+  "pulse_width_ms": 1.0,
+  "spikes_before_on": 0,
+  "spikes_between": 8,
+  "spikes_after_off": 0,
+  "off_pulse_delay_after_spike_ms": 8.65,
+  "period_ms": 16.02
+ }
+}
